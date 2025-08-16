@@ -78,6 +78,6 @@ class GEMMA3_270M(PretrainedConfig):
         }
         self.rope_theta = 1000000.0
         self.sliding_window = 512
-        self.use_cahce = False
+        self.use_cache = False
         self.output_hidden_states = None
         self.vocab_size = 262144
