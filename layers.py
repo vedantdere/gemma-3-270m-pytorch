@@ -270,7 +270,9 @@ class Gemma3TextModel(nn.Module):
                 attention_mask=None,
                 position_ids=None,
                 past_key_values=None,
+                input_embeds=None,
                 output_attentions=False,
+                output_hidden_states=False,
                 use_cache=False,
                 cache_position=None,
                 **kwargs):
