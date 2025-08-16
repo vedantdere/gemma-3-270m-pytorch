@@ -250,6 +250,7 @@ class Gemma3TextModel(nn.Module):
 
         self.padding_idx=config.pad_token_id
         self.vocab_size=config.vocab_size
+        self.config = config
 
         self.embed_tokens=Gemma3TextScalableWordEmbedding(
             config.vocab_size,
