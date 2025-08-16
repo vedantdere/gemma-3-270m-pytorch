@@ -4,6 +4,8 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 from attn_implementation import eager_paged_attention_forward
+import copy
+
 
 class Gemma3TextScalableWordEmbedding(nn.Embedding):
     def __init__(self,
@@ -72,7 +74,7 @@ class Gemma3RotaryEmbedding(nn.Module):
         position_ids_expanded = position_ids[:,None,:].float()
 
         device_type=x.device.type if isinstance(x.device.type,str) and x.device.type != 'mps' else 'cpu'
-        with torch.autocast(device_type=device_type,enable=False):
+        with torch.autocast(device_type=device_type,enabled=False):
             freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1,2)
             emb=torch.cat((freqs,freqs),dim=-1)
             cos=emb.cos() * self.attention_scaling
@@ -133,14 +135,17 @@ class Gemma3Attention(nn.Module):
                 hidden_states,
                 position_embeddings,
                 attention_mask,
+                position_ids=None,
                 past_key_values=None,
-                cache_posotion=None,
+                output_attentions=None,
+                cache_position=None,
+                use_cache=False,
                 **kwargs):
         
         input_shape=hidden_states.shape[:-1]
         hidden_shape=(*input_shape,-1,self.head_dim)
 
-        query_states=self.q_proj(hidden_states).view(hidden_states).transpose(1,2)
+        query_states=self.q_proj(hidden_states).view(hidden_shape).transpose(1,2)
         key_states=self.k_proj(hidden_states).view(hidden_shape).transpose(1,2)
         value_states=self.v_proj(hidden_states).view(hidden_shape).transpose(1,2)
 
@@ -149,7 +154,7 @@ class Gemma3Attention(nn.Module):
 
         cos,sin=position_embeddings
 
-        query_states,key_states=apply_rotart_pos_emb(query_states,key_states,cos,sin,position_ids=cache_posotion)
+        query_states,key_states=apply_rotart_pos_emb(query_states,key_states,cos,sin,position_ids=cache_position)
 
         attention_inference = eager_paged_attention_forward
 
@@ -158,7 +163,8 @@ class Gemma3Attention(nn.Module):
             query_states,
             key_states,
             value_states,
-            dropout=self.attention_dropout if self.training else 0.0,
+            attention_mask,
+            dropout=0.0,
             scaling=self.scaling,
             sliding_window=self.sliding_window,
             **kwargs
@@ -197,7 +203,7 @@ class Gemma3DecoderLayer(nn.Module):
                 attention_mask=None,
                 position_ids=None,
                 past_key_values=None,
-                output_attention=False,
+
                 use_cache=False,
                 cache_position=None,
                 **kwargs):
@@ -212,15 +218,14 @@ class Gemma3DecoderLayer(nn.Module):
             position_embeddings=posotion_embeddings_global 
         
         hidden_states,self_attn_weights=self.self_attn(
-            hidden_states,
-            position_embeddings,
-            attention_mask,
-            position_ids,
-            past_key_values,
-            output_attention,
-            use_cache,
-            cache_position,
-            **kwargs
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **kwargs,
         )
 
         hidden_states=self.post_attention_layernorm(hidden_states)
@@ -236,8 +241,7 @@ class Gemma3DecoderLayer(nn.Module):
 
         output=(hidden_states,)
 
-        if output_attention:
-            output += (self_attn_weights)
+
         return output
     
 class Gemma3TextModel(nn.Module):
@@ -262,6 +266,9 @@ class Gemma3TextModel(nn.Module):
 
         self.norm = Gemma3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb=Gemma3RotaryEmbedding(config)
+
+        config = copy.deepcopy(config)
+        self.rotary_emb_local = Gemma3RotaryEmbedding(config=config)
 
         self.gradient_checkpointing=False
 
@@ -317,8 +324,8 @@ class Gemma3TextModel(nn.Module):
 
             layer_outputs = decoder_layer(
                 hidden_states,
-                position_embeddings_global=position_embeds_global,
-                position_embeddings_local=position_embeds_local,
+                posotion_embeddings_global=position_embeds_global,
+                posotion_embeddings_local=position_embeds_local,
                 attention_mask=causal_mask_mapping[decoder_layer.attention_type],
                 position_ids=position_ids,
                 past_key_values=past_key_values,
@@ -344,7 +351,7 @@ class Gemma3TextModel(nn.Module):
             all_hidden_states += (hidden_states,)
         
         return BaseModelOutputWithPast(
-            last_hiddden_state=hidden_states,
+            last_hidden_state=hidden_states,
             past_key_values=past_key_values,
             hidden_states=all_hidden_states,
             attentions=all_self_attns
