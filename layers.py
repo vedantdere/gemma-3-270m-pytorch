@@ -101,7 +101,7 @@ class Gemma3Attention(nn.Module):
     def __init__(self,config,layer_idx):
         super().__init__()
 
-        self.is_sliding=config.layer_type[layer_idx]=="sliding_attention"
+        self.is_sliding=config.layer_types[layer_idx]=="sliding_attention"
 
         self.config=config
         self.layer_idx=layer_idx
@@ -182,7 +182,7 @@ class Gemma3DecoderLayer(nn.Module):
         self.config = config
         self.hidden_size=config.hidden_size
         self.layer_idx=layer_idx
-        self.attention_type=config.layer_type[layer_idx]
+        self.attention_type=config.layer_types[layer_idx]
 
         self.self_attn=Gemma3Attention(config,layer_idx)
         self.mlp=Gemma3MLP(config)
