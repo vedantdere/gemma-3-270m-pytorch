@@ -69,7 +69,13 @@ class GEMMA3_270M(PretrainedConfig):
         self.query_pre_attn_scalar = 256
         self.rms_norm_eps = 1e-6
         self.rope_local_base_freq = 10000.0
-        self.rope_scaling = None
+        self.rope_scaling={
+            "rope_type":"yarn",
+            "factor":32.0,
+            "beta_fast":32.0,
+            "beta_slow":1.0,
+            "truncate":False
+        }
         self.rope_theta = 1000000.0
         self.sliding_window = 512
         self.use_cahce = False
