@@ -56,6 +56,7 @@ class GEMMA3_270M(PretrainedConfig):
         self.hidden_activation = "silu"
         self.hidden_size = 256
         self.num_hidden_layers = 18
+        self.intermediate_size = 2048
         self.layer_types = [
             "sliding_attention" if bool((i+1)%2) else "full_attention" for i in range(self.num_hidden_layers)
         ]
