@@ -1,6 +1,6 @@
 # 🚀 gemma-3-270M – Pure PyTorch Reimplementation
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1sDJUWJNbdxZoMGGoY7YTWwLyE0L8lGon?usp=sharing)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1E1X_CRyFvpdU4rSSk-BoYB9jkIfp4zDK?usp=sharing)
 
 
 <p align="center">
