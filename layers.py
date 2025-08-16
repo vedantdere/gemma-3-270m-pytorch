@@ -54,10 +54,7 @@ class Gemma3RotaryEmbedding(nn.Module):
     def __init__(self,config,device=None):
         super().__init__()
 
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        self.rope_type = 'yarn'
 
         self.max_seq_len_cached=config.max_position_embeddings
         self.original_max_seq_len=config.max_position_embeddings
