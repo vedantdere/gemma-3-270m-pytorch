@@ -15,7 +15,7 @@ class Gemma3TextScalableWordEmbedding(nn.Embedding):
     def forward(self,input_ids):
         return super().forward(input_ids) * self.embed_scale.to(self.weight.dtype)
     
-class Gemma3RMSNorm(nn.Module):
+class Gemma3MLP(nn.Module):
     def __init__(self,config):
         super().__init__()
 
@@ -170,3 +170,73 @@ class Gemma3Attention(nn.Module):
     
 
 
+class Gemma3DecoderLayer(nn.Module):
+    def __init__(self,
+                 config,
+                 layer_idx):
+        super().__init__()
+
+        self.config = config
+        self.hidden_size=config.hidden_size
+        self.layer_idx=layer_idx
+        self.attention_type=config.layer_type[layer_idx]
+
+        self.self_attn=Gemma3Attention(config,layer_idx)
+        self.mlp=Gemma3MLP(config)
+
+        self.input_layernorm=Gemma3RMSNorm(self.hidden_size,eps=config.rms_norm_eps)
+
+        self.post_attention_layernorm=Gemma3RMSNorm(self.hidden_size,eps=config.rms_norm_eps)
+        self.pre_feedforward_layernorm=Gemma3RMSNorm(self.hidden_size,eps=config.rms_norm_eps)
+        self.post_feedforward_layernorm=Gemma3RMSNorm(self.hidden_size,eps=config.rms_norm_eps) 
+
+    def forward(self,
+                hidden_states,
+                posotion_embeddings_global,
+                posotion_embeddings_local,
+                attention_mask=None,
+                position_ids=None,
+                past_key_values=None,
+                output_attention=False,
+                use_cache=False,
+                cache_position=None,
+                **kwargs):
+        
+        residual=hidden_states
+
+        hidden_states=self.input_layernorm(hidden_states)
+
+        if self.self_attn.is_sliding:
+            position_embeddings=posotion_embeddings_local
+        else:
+            position_embeddings=posotion_embeddings_global 
+        
+        hidden_states,self_attn_weights=self.self_attn(
+            hidden_states,
+            position_embeddings,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            output_attention,
+            use_cache,
+            cache_position,
+            **kwargs
+        )
+
+        hidden_states=self.post_attention_layernorm(hidden_states)
+
+        hidden_states = residual + hidden_states
+
+        residual=hidden_states
+
+        hidden_states=self.pre_feedforward_layernorm(hidden_states)
+        hidden_states=self.mlp(hidden_states)
+        hidden_states=self.post_feedforward_layernorm(hidden_states)
+        hidden_states=residual+hidden_states
+
+        output=(hidden_states,)
+
+        if output_attention:
+            output += (self_attn_weights)
+        return output
+    
