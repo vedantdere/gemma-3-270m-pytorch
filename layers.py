@@ -1,6 +1,9 @@
 import torch
 from torch import nn
-
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
+from attn_implementation import eager_paged_attention_forward
 
 class Gemma3TextScalableWordEmbedding(nn.Embedding):
     def __init__(self,
@@ -240,3 +243,155 @@ class Gemma3DecoderLayer(nn.Module):
             output += (self_attn_weights)
         return output
     
+class Gemma3TextModel(nn.Module):
+    def __init__(self,
+                 config):
+        super().__init__()
+
+        self.padding_idx=config.pad_token_id
+        self.vocab_size=config.vocab_size
+
+        self.embed_tokens=Gemma3TextScalableWordEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            self.config.hidden_size**-0.5
+        )
+
+        self.layers = nn.ModuleList(
+            [Gemma3DecoderLayer(config,layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        )
+
+        self.norm = Gemma3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb=Gemma3RotaryEmbedding(config)
+
+        self.gradient_checkpointing=False
+
+    def forward(self,
+                input_ids=None,
+                attention_mask=None,
+                position_ids=None,
+                past_key_values=None,
+                output_attentions=False,
+                use_cache=False,
+                cache_position=None,
+                **kwargs):
+        
+        output_attentions=output_attentions if output_attentions is not None else self.config.output_attentions
+
+        output_hidden_states=(
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+        if input_embeds is None:
+            input_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = input_embeds
+
+        position_embeds_global=self.rotary_emb(hidden_states,position_ids)
+        position_embeds_local=self.rotary_emb_local(hidden_states,position_ids)
+
+
+        if not isinstance(causal_mask_mapping := attention_mask, dict):
+            # Prepare mask arguments
+            mask_kwargs = {
+                "config": self.config,
+                "input_embeds": input_embeds,
+                "attention_mask": attention_mask,
+                "cache_position": cache_position,
+                "past_key_values": past_key_values,
+                "position_ids": position_ids,
+            }
+            # Create the masks
+            causal_mask_mapping = {
+                "full_attention": create_causal_mask(**mask_kwargs),
+                "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
+            }
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns=() if output_attentions else None
+
+        for decoder_layer in self.layers[:self.config.num_hidden_layers]:
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+
+            layer_outputs = decoder_layer(
+                hidden_states,
+                position_embeddings_global=position_embeds_global,
+                position_embeddings_local=position_embeds_local,
+                attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                **kwargs,
+            )
+
+            hidden_states=layer_outputs[0]
+
+            if output_attentions:
+                all_self_attns += (layer_outputs[1],)
+        
+        hidden_states=layer_outputs[0]
+
+        if output_attentions:
+            all_self_attns += (layer_outputs[1],)
+
+        hidden_states=self.norm(hidden_states)
+
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+        
+        return BaseModelOutputWithPast(
+            last_hiddden_state=hidden_states,
+            past_key_values=past_key_values,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns
+        )
+    
+
+class Gemma3Model(nn.Module):
+    def __init__(self,config):
+        super().__init__()
+
+        self.model = Gemma3TextModel(config)
+        self.vocab_size=config.vocab_size
+        self.lm_head=nn.Linear(
+            config.hidden_size,
+            config.vocab_size,
+            bias=False
+        )
+
+    def forward(self,
+                input_ids=None,
+                attention_mask=None,
+                position_ids=None,
+                past_key_values=None,
+                input_embeds=None,
+                labels=None,
+                use_cache=None,
+                output_attentions=None,
+                output_hidden_states=None,
+                cache_position=None,
+                logits_to_keep=0,
+                **kwargs):
+        
+        outputs = self.model(
+            input_ids,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            input_embeds,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            cache_position,
+            **kwargs
+        )
+
+        hidden_states = outputs.last_hidden_state
+        slice_indices=slice(-logits_to_keep,None) if logits_to_keep > 0 else slice(None,None)
+        logits = self.lm_head(hidden_states[:,slice_indices,:])
+
+        return logits
